@@ -7,30 +7,35 @@ import { CheckCircle, Users, Award, MapPin, Phone } from 'lucide-react'
 const AboutPage = () => {
   const teamMembers = [
     {
-      name: "John Smith",
-      title: "Founder & CEO",
-      experience: "15+ years in geothermal",
-      certifications: ["IGSHPA Certified", "Mass Licensed"]
+      name: "Managing Director",
+      title: "Engineering Leadership",
+      experience: "Master's Degree in Engineering, Certified Designer and Installer for Ground Source Heat Pumps (IGSHPA)",
+      certifications: ["IGSHPA Designer", "IGSHPA Installer", "Master's Engineering", "Mass Licensed"]
     },
     {
-      name: "Sarah Johnson",
-      title: "Lead Engineer",
-      experience: "12+ years HVAC design",
-      certifications: ["PE License", "LEED AP"]
+      name: "Operations Executive",
+      title: "Project Management",
+      experience: "More than half a decade of operations experience with effective project management and support from start to finish",
+      certifications: ["Project Management Professional", "Customer Relations Certified", "Operations Management"]
     },
     {
-      name: "Mike Chen",
-      title: "Installation Manager",
-      experience: "10+ years drilling",
-      certifications: ["Drilling Certified", "Safety Trained"]
+      name: "Installation Manager",
+      title: "Field Operations",
+      experience: "10+ years drilling and installation expertise",
+      certifications: ["Drilling Certified", "Safety Trained", "Equipment Specialist"]
     }
   ]
 
   const certifications = [
-    "IGSHPA Certified Installer",
-    "Massachusetts Licensed Contractor",
-    "EPA Certified Technicians",
-    "OSHA Safety Certified",
+    "IGSHPA Designer Certification",
+    "IGSHPA Installer Certification",
+    "Electrical License - Massachusetts",
+    "HIC Registration - Home Improvement Contractor",
+    "Drilling Licenses - Geothermal Boring",
+    "EPA Section 608 Certified Technicians",
+    "OSHA 30-Hour Safety Certification",
+    "MassSave Partner (Pending Approval)",
+    "Mass Climate Bank ESHLP Approved",
     "Better Business Bureau A+ Rating"
   ]
 
@@ -214,10 +219,10 @@ const AboutPage = () => {
             Contact us today for a free consultation and site assessment
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <a href="tel:+15551234567">
+            <a href="tel:+17816545879">
               <Button size="lg" className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 font-bold">
                 <Phone className="h-5 w-5 mr-2" />
-                Call (555) 123-4567
+                Call (781) 654-5879
               </Button>
             </a>
             <Button size="lg" variant="outline" className="border-blue-600 text-blue-600 hover:bg-blue-50 px-8 py-3">

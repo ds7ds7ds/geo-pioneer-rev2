@@ -471,14 +471,14 @@ const HomePage = () => {
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
 
-            <a href="tel:+15551234567">
+            <a href="tel:+17816545879">
               <Button 
                 size="lg" 
                 variant="outline" 
                 className="border-white text-white bg-green-600/20 hover:bg-green-600 px-8 py-3 font-bold"
               >
                 <Phone className="h-5 w-5 mr-2" />
-                Call (555) 123-4567
+                Call (781) 654-5879
               </Button>
             </a>
           </div>
@@ -526,7 +526,7 @@ const HomePage = () => {
                     <input 
                       type="tel" 
                       className="w-full p-3 border border-gray-300 rounded-md focus:border-cyan-400 focus:outline-none"
-                      placeholder="(555) 123-4567"
+                      placeholder="(781) 654-5879"
                     />
                   </div>
                   <div>
@@ -576,7 +576,7 @@ const HomePage = () => {
                       const formData = {
                         name: document.querySelector('input[placeholder="Your full name"]').value,
                         email: document.querySelector('input[placeholder="your@email.com"]').value,
-                        phone: document.querySelector('input[placeholder="(555) 123-4567"]').value,
+                        phone: document.querySelector('input[placeholder="(781) 654-5879"]').value,
                         propertyType: document.querySelector('select').value,
                         address: document.querySelector('input[placeholder="123 Main St, City, State, ZIP"]').value,
                         additionalInfo: document.querySelector('textarea').value,
@@ -612,11 +612,11 @@ The report includes:
 
 We'll contact you within 24 hours to schedule your on-site evaluation.`)
                         } else {
-                          alert(`Error: ${result.message}. Please try again or contact us directly at (555) 123-4567.`)
+                          alert(`Error: ${result.message}. Please try again or contact us directly at (781) 654-5879.`)
                         }
                       } catch (error) {
                         console.error('Report generation error:', error)
-                        alert('There was an issue generating your report. Please try again or contact us directly at (555) 123-4567.')
+                        alert('There was an issue generating your report. Please try again or contact us directly at (781) 654-5879.')
                       }
                       
                       setShowAssessment(false)
@@ -665,14 +665,14 @@ We'll contact you within 24 hours to schedule your on-site evaluation.`)
                       <CheckCircle className="h-6 w-6 text-green-600 mt-1 flex-shrink-0" />
                       <div>
                         <h4 className="font-semibold text-gray-900">Managing Director</h4>
-                        <p className="text-gray-700">Over 15 years of international drilling experience, Master's degree in Reservoir Engineering, certified designer for ground source heat pumps</p>
+                        <p className="text-gray-700">Master's Degree in Engineering, Certified Designer and Installer for Ground Source Heat Pumps (IGSHPA)</p>
                       </div>
                     </div>
                     <div className="flex items-start space-x-3">
                       <CheckCircle className="h-6 w-6 text-green-600 mt-1 flex-shrink-0" />
                       <div>
                         <h4 className="font-semibold text-gray-900">Operations Executive</h4>
-                        <p className="text-gray-700">MBA from MIT, ensuring strategic planning and effective project management from start to finish</p>
+                        <p className="text-gray-700">More than half a decade of operations experience with effective project management and support from start to finish</p>
                       </div>
                     </div>
                     <div className="flex items-start space-x-3">
