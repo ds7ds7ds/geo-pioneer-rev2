@@ -730,11 +730,11 @@ We'll contact you within 24 hours to schedule your on-site evaluation.`)
               <CardContent>
                 <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
                   <a 
-                    href="tel:+17816545800" 
+                    href="tel:+17816545879" 
                     className="inline-flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
                   >
                     <Phone className="h-5 w-5" />
-                    Call (781) 654-5800
+                    Call (781) 654-5879
                   </a>
                   <a 
                     href="mailto:info@geopioneer.com" 
