@@ -1,9 +1,32 @@
 """
 Project Kelvin — Local Agent for Celsius Design v6.2d Automation
 =================================================================
-Rewritten v3.0 — Uses Ctrl+Tab / Ctrl+Shift+Tab keyboard cycling for ALL
-tab navigation.  LabVIEW tab controls do NOT respond to mouse clicks via
-pyautogui, win32api.SendMessage, or PostMessage.
+v4.0 — Uses DIRECT MOUSE CLICKS at confirmed tab coordinates.
+
+Critical findings from testing:
+  - Ctrl+Tab does NOT switch LabVIEW tabs — it cycles between OS windows.
+  - Direct pyautogui.click(x, y) on the tab text DOES WORK when the window
+    is maximized to 1920×1080 and y is swept across 28–40 px from screen top.
+  - Confirmed working tab X positions (screen coords, maximised 1920×1080):
+      Sub-surface:              x=40,  y=34
+      Well placement:           x=113, y=34  ← CONFIRMED
+      Building loads:           x=192, y=34  ← CONFIRMED
+      Energy production:        x=271, y=34
+      Heat pumps:               x=350, y=34
+      Optimize length:          x=426, y=34
+      Hourly plots:             x=500, y=34
+      Results -Heat pump loads: x=593, y=34
+      More results:             x=687, y=34
+      Yearly results:           x=755, y=34
+      Economics:                x=820, y=34
+      Export and load:          x=889, y=34
+
+Password entry:
+  - force_foreground() with AttachThreadInput
+  - Click field at 45% from left, 35% from top of dialog rect
+  - Triple-click to select all, then Ctrl+V paste via clip.exe
+  - Press Enter to submit (NOT the Unlock button click)
+  - No character-by-character backup (it appended duplicate text)
 
 Requirements:
     pip install pyautogui aiohttp pywinauto Pillow
@@ -25,12 +48,12 @@ from pathlib import Path
 from datetime import datetime
 
 # ---------------------------------------------------------------------------
-#  Third-party imports (with graceful fallback)
+#  Third-party imports (graceful fallback so the module loads on non-Windows)
 # ---------------------------------------------------------------------------
 try:
     import pyautogui
     pyautogui.PAUSE = 0.25
-    pyautogui.FAILSAFE = True  # Move mouse to top-left corner to abort
+    pyautogui.FAILSAFE = True   # Move mouse to top-left corner to abort
 except ImportError:
     pyautogui = None
 
@@ -46,18 +69,40 @@ except ImportError:
 # ---------------------------------------------------------------------------
 #  Configuration
 # ---------------------------------------------------------------------------
-AGENT_PORT = 8765
-WORK_DIR = Path.home() / "KelvinAgent"
-INPUT_DIR = WORK_DIR / "input"
-OUTPUT_DIR = WORK_DIR / "output"
-LOG_DIR = WORK_DIR / "logs"
+AGENT_PORT      = 8765
+WORK_DIR        = Path.home() / "KelvinAgent"
+INPUT_DIR       = WORK_DIR / "input"
+OUTPUT_DIR      = WORK_DIR / "output"
+LOG_DIR         = WORK_DIR / "logs"
 
-CELSIUS_EXE = r"C:\Planner\Celsius.design.v6.2d"
+CELSIUS_EXE     = r"C:\Planner\Celsius.design.v6.2d"
 CELSIUS_PASSWORD = "Go, Celsius, go!"
 
+# Window title regex — matches both the main app and the password dialog
 TITLE_RE = r".*[Cc]elsius.*|.*master_password.*"
 
-# Tab order (0-indexed) — the ONLY reliable way to navigate is Ctrl+Tab
+# ---------------------------------------------------------------------------
+#  Confirmed tab positions (screen coordinates, window maximised to 1920×1080)
+#  Y is swept from 28 to 40 to guarantee hitting the tab text regardless of
+#  minor rendering differences.
+# ---------------------------------------------------------------------------
+TAB_POSITIONS = {
+    "Sub-surface":              40,
+    "Well placement":           113,
+    "Building loads":           192,
+    "Energy production":        271,
+    "Heat pumps":               350,
+    "Optimize length":          426,
+    "Hourly plots":             500,
+    "Results -Heat pump loads": 593,
+    "More results":             687,
+    "Yearly results":           755,
+    "Economics":                820,
+    "Export and load":          889,
+}
+TAB_Y_VALUES = [28, 30, 32, 34, 36, 38, 40]   # sweep to hit the tab text
+
+# Tab index → name mapping (0-based)
 TAB_NAMES = [
     "Sub-surface",                  # 0
     "Well placement",               # 1
@@ -74,20 +119,17 @@ TAB_NAMES = [
 ]
 NUM_TABS = len(TAB_NAMES)
 
-# Password dialog specifics
-PASSWORD_DIALOG_TITLE = "master_password"
-
-# Simulation wait (seconds)
+# Simulation wait time (seconds)
 SIMULATION_WAIT = 100
 
-# Unverified button positions (1920-px reference, will be scaled)
-# These are best-guess estimates — the agent takes screenshots to verify.
-EXPORT_TAB_LOAD_FOLDER_ICON = (920, 370)
-EXPORT_TAB_LOAD_BUTTON       = (1050, 370)
+# Unverified button positions (1920-px reference, scaled at runtime).
+# These are estimates; the agent takes screenshots so you can calibrate.
+EXPORT_TAB_LOAD_FOLDER_ICON  = (920, 370)
+EXPORT_TAB_LOAD_BUTTON        = (1050, 370)
 EXPORT_TAB_SAVE_FOLDER_ICON  = (920, 280)
 EXPORT_TAB_SAVE_BUTTON        = (1050, 280)
 
-# Multiple candidate positions for "Optimize placement" button
+# Multiple candidate positions for the "Optimize placement" button
 OPTIMIZE_BUTTON_CANDIDATES = [
     (160, 170),
     (160, 200),
@@ -100,8 +142,8 @@ OPTIMIZE_BUTTON_CANDIDATES = [
 # ---------------------------------------------------------------------------
 #  Directory setup
 # ---------------------------------------------------------------------------
-for d in [WORK_DIR, INPUT_DIR, OUTPUT_DIR, LOG_DIR]:
-    d.mkdir(parents=True, exist_ok=True)
+for _d in [WORK_DIR, INPUT_DIR, OUTPUT_DIR, LOG_DIR]:
+    _d.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------
 #  Logging
@@ -144,28 +186,28 @@ def _find_all_windows(title_pattern=None):
     pattern = re.compile(title_pattern or r".*[Cc]elsius.*", re.IGNORECASE)
 
     if not win32gui:
-        log.warning("win32gui not available, cannot enumerate windows")
+        log.warning("win32gui not available")
         return results
 
-    def _enum_callback(hwnd, _):
+    def _cb(hwnd, _):
         try:
             if not win32gui.IsWindow(hwnd):
                 return True
             title = win32gui.GetWindowText(hwnd)
             if not title or not pattern.search(title):
                 return True
-            rect = win32gui.GetWindowRect(hwnd)
-            visible = win32gui.IsWindowVisible(hwnd)
-            results.append((hwnd, title, rect, visible))
+            rect  = win32gui.GetWindowRect(hwnd)
+            vis   = win32gui.IsWindowVisible(hwnd)
+            results.append((hwnd, title, rect, vis))
             l, t, r, b = rect
             log.debug(f"  Window: '{title}' hwnd={hwnd} rect={rect} "
-                       f"visible={visible} size={r-l}x{b-t}")
+                      f"vis={vis} size={r-l}x{b-t}")
         except Exception:
             pass
         return True
 
     try:
-        win32gui.EnumWindows(_enum_callback, None)
+        win32gui.EnumWindows(_cb, None)
     except Exception as e:
         log.warning(f"EnumWindows failed: {e}")
 
@@ -177,7 +219,7 @@ def _find_all_windows(title_pattern=None):
                     title_re=title_pattern or r".*[Cc]elsius.*"):
                 h = w.handle
                 try:
-                    rect = win32gui.GetWindowRect(h) if win32gui else (0, 0, 0, 0)
+                    rect = win32gui.GetWindowRect(h) if win32gui else (0,0,0,0)
                 except Exception:
                     rect = (0, 0, 0, 0)
                 results.append((h, w.name, rect, True))
@@ -188,14 +230,14 @@ def _find_all_windows(title_pattern=None):
 
 
 def _pick_best_handle(handles_info):
-    """Pick the largest visible window from a list."""
+    """Return (handle, name, rect) for the largest visible window."""
     best, best_score = None, -1
     for item in handles_info:
         h, name, rect = item[0], item[1], item[2]
-        visible = item[3] if len(item) > 3 else True
+        vis = item[3] if len(item) > 3 else True
         l, t, r, b = rect
-        area = (r - l) * (b - t)
-        score = area + (10_000_000 if visible else 0)
+        area  = (r - l) * (b - t)
+        score = area + (10_000_000 if vis else 0)
         if score > best_score:
             best_score = score
             best = (h, name, rect)
@@ -203,9 +245,9 @@ def _pick_best_handle(handles_info):
 
 
 def get_celsius_handle():
-    """Return (handle, name, clamped_rect) for the main Celsius window, or None."""
+    """Return (handle, name, clamped_rect) for the main Celsius window."""
     handles = _find_all_windows(TITLE_RE)
-    best = _pick_best_handle(handles)
+    best    = _pick_best_handle(handles)
     if not best:
         return None
     h, name, rect = best
@@ -221,33 +263,32 @@ def get_window_rect():
     """Return (left, top, right, bottom) for Celsius, clamped to screen."""
     info = get_celsius_handle()
     if info:
-        _, _, rect = info
-        return rect
+        return info[2]
     sw, sh = pyautogui.size()
     log.warning("Celsius window not found — using full screen as fallback")
     return (0, 0, sw, sh)
 
 
-def _ensure_foreground(handle):
-    """Bring *handle* to the foreground using AttachThreadInput trick.
-    NEVER uses SW_RESTORE (9) which un-maximizes a maximized window."""
+def force_foreground(handle):
+    """Bring *handle* to the foreground using the AttachThreadInput trick.
+    Never uses SW_RESTORE (9) on a maximised window — that would un-maximise it."""
     if not win32gui or not handle:
         return
     try:
-        user32 = ctypes.windll.user32
-        fg_hwnd = user32.GetForegroundWindow()
-        fg_tid = user32.GetWindowThreadProcessId(fg_hwnd, None)
-        tgt_tid = user32.GetWindowThreadProcessId(handle, None)
+        user32   = ctypes.windll.user32
+        fg_hwnd  = user32.GetForegroundWindow()
+        fg_tid   = user32.GetWindowThreadProcessId(fg_hwnd, None)
+        tgt_tid  = user32.GetWindowThreadProcessId(handle, None)
 
         user32.AttachThreadInput(tgt_tid, fg_tid, True)
 
         is_iconic = user32.IsIconic(handle)
         is_zoomed = user32.IsZoomed(handle)
         if is_iconic:
-            win32gui.ShowWindow(handle, 9)   # SW_RESTORE (from minimised)
+            win32gui.ShowWindow(handle, 9)   # SW_RESTORE (from minimised only)
             log.info("Window was minimised → restored")
         elif is_zoomed:
-            win32gui.ShowWindow(handle, 3)   # SW_SHOWMAXIMIZED (keeps max)
+            win32gui.ShowWindow(handle, 3)   # SW_SHOWMAXIMIZED (keeps maximised)
             log.info("Window already maximised → kept maximised")
         else:
             win32gui.ShowWindow(handle, 5)   # SW_SHOW
@@ -259,21 +300,20 @@ def _ensure_foreground(handle):
         time.sleep(0.4)
 
         if user32.GetForegroundWindow() == handle:
-            log.info("Confirmed: Celsius is foreground")
+            log.info("Confirmed: window is foreground")
         else:
-            log.warning("Celsius may not be foreground — trying Alt method")
-            pyautogui.hotkey("alt", "tab")
-            time.sleep(0.6)
+            log.warning("Window may not be foreground — trying SetForegroundWindow again")
             try:
                 win32gui.SetForegroundWindow(handle)
+                time.sleep(0.3)
             except Exception:
                 pass
     except Exception as e:
-        log.warning(f"_ensure_foreground failed: {e}")
+        log.warning(f"force_foreground failed: {e}")
 
 
-def _ensure_maximized(handle=None):
-    """Make sure the Celsius window is maximized.  Re-maximize if needed."""
+def ensure_maximized(handle=None):
+    """Maximise the Celsius window if it is not already maximised."""
     if handle is None:
         info = get_celsius_handle()
         if not info:
@@ -282,24 +322,24 @@ def _ensure_maximized(handle=None):
     try:
         if not ctypes.windll.user32.IsZoomed(handle):
             log.warning("Window NOT maximised — re-maximising …")
-            win32gui.ShowWindow(handle, 3)  # SW_MAXIMIZE
-            time.sleep(0.5)
+            win32gui.ShowWindow(handle, 3)   # SW_MAXIMIZE
+            time.sleep(0.6)
         else:
             log.debug("Window confirmed maximised")
     except Exception as e:
-        log.warning(f"_ensure_maximized error: {e}")
+        log.warning(f"ensure_maximized error: {e}")
 
 
-def bring_window_to_front(do_maximize=False):
-    """Bring the main Celsius window to front.  Optionally maximize."""
+def bring_to_front(do_maximize=False):
+    """Bring the main Celsius window to the foreground, optionally maximise."""
     info = get_celsius_handle()
     if not info:
         log.warning("No Celsius window found for bring_to_front")
         return None
     handle, name, rect = info
-    _ensure_foreground(handle)
+    force_foreground(handle)
     if do_maximize:
-        _ensure_maximized(handle)
+        ensure_maximized(handle)
     time.sleep(0.3)
     return handle
 
@@ -309,9 +349,9 @@ def bring_window_to_front(do_maximize=False):
 # ╚═══════════════════════════════════════════════════════════════════════════╝
 
 def take_screenshot(label="screenshot"):
-    """Save a timestamped screenshot and return the path."""
+    """Save a timestamped screenshot to LOG_DIR and return the path."""
     try:
-        ts = datetime.now().strftime("%H%M%S_%f")[:10]
+        ts   = datetime.now().strftime("%H%M%S_%f")[:10]
         path = LOG_DIR / f"{label}_{ts}.png"
         pyautogui.screenshot(str(path))
         log.info(f"Screenshot [{label}]: {path}")
@@ -326,7 +366,8 @@ def take_screenshot(label="screenshot"):
 # ╚═══════════════════════════════════════════════════════════════════════════╝
 
 def set_clipboard(text):
-    """Set the Windows clipboard via clip.exe (most reliable method)."""
+    """Set the Windows clipboard via clip.exe (most reliable method).
+    Falls back to PowerShell if clip.exe is unavailable."""
     try:
         subprocess.run(["clip"], input=text.encode("utf-8"),
                        check=True, timeout=5)
@@ -346,136 +387,77 @@ def set_clipboard(text):
 
 
 # ╔═══════════════════════════════════════════════════════════════════════════╗
-# ║  TAB NAVIGATION — Ctrl+Tab / Ctrl+Shift+Tab                             ║
+# ║  Tab navigation — direct mouse clicks at confirmed screen coordinates   ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
 
-class TabNavigator:
-    """Navigate Celsius tabs exclusively via keyboard shortcuts.
+async def click_tab(tab_name: str):
+    """Click the named tab using confirmed screen X coordinates.
 
     Strategy
     --------
-    1. **Reset to tab 0 (Sub-surface)** by pressing Ctrl+Shift+Tab many times
-       (more than the total number of tabs) to guarantee we wrap all the way
-       back to the first tab.
-    2. **Advance forward** with Ctrl+Tab exactly *N* times to reach tab *N*.
-    3. Take a verification screenshot after every navigation.
+    1. Bring Celsius to front and ensure it is maximised.
+    2. Look up the confirmed X position for the tab.
+    3. Click at (tab_x, y) for each y in TAB_Y_VALUES (28 → 40).
+       This sweeps the full height of the tab text row, guaranteeing a hit
+       even if the exact pixel row varies slightly between runs.
+    4. Take a verification screenshot.
 
-    This class tracks the *assumed* current tab index so that repeated
-    navigations within the same pipeline run can take shortcuts.  However,
-    every public ``navigate_to`` call can optionally force a full reset.
+    The window is assumed to be maximised at 1920×1080, so the X coordinates
+    in TAB_POSITIONS are used as absolute screen coordinates (no scaling needed
+    when the window is full-screen).  If the window rect differs from (0,0),
+    the left/top offset is added automatically.
     """
+    if tab_name not in TAB_POSITIONS:
+        raise ValueError(f"Unknown tab: '{tab_name}'. "
+                         f"Valid names: {list(TAB_POSITIONS.keys())}")
 
-    RESET_PRESSES = 15  # > NUM_TABS to guarantee landing on tab 0
+    log.info(f"▸ Clicking tab: '{tab_name}'")
 
-    def __init__(self):
-        self._current_tab: int | None = None  # None = unknown
+    # Ensure Celsius is foreground and maximised
+    handle = bring_to_front(do_maximize=True)
+    await asyncio.sleep(0.4)
 
-    # ── internal helpers ──────────────────────────────────────────────
+    # Get window top-left offset (usually 0,0 when maximised, but be safe)
+    rect  = get_window_rect()
+    win_l = rect[0]   # usually 0
+    win_t = rect[1]   # usually 0
 
-    @staticmethod
-    async def _press_ctrl_tab(times: int = 1, delay: float = 0.35):
-        """Press Ctrl+Tab *times* times (forward)."""
-        for i in range(times):
-            pyautogui.hotkey("ctrl", "tab")
-            await asyncio.sleep(delay)
+    tab_x = win_l + TAB_POSITIONS[tab_name]
 
-    @staticmethod
-    async def _press_ctrl_shift_tab(times: int = 1, delay: float = 0.35):
-        """Press Ctrl+Shift+Tab *times* times (backward)."""
-        for i in range(times):
-            pyautogui.hotkey("ctrl", "shift", "tab")
-            await asyncio.sleep(delay)
+    # Sweep Y values to guarantee hitting the tab text
+    for y_offset in TAB_Y_VALUES:
+        tab_y = win_t + y_offset
+        log.debug(f"  click ({tab_x}, {tab_y})")
+        pyautogui.click(tab_x, tab_y)
+        await asyncio.sleep(0.12)
 
-    async def _reset_to_first_tab(self):
-        """Slam Ctrl+Shift+Tab enough times to guarantee tab 0."""
-        log.info(f"Resetting to tab 0 (Sub-surface) with "
-                 f"{self.RESET_PRESSES}× Ctrl+Shift+Tab …")
-        await self._press_ctrl_shift_tab(self.RESET_PRESSES, delay=0.20)
-        self._current_tab = 0
-        log.info("Tab reset complete — assumed at tab 0 (Sub-surface)")
+    # One final click at the canonical confirmed Y=34
+    pyautogui.click(tab_x, win_t + 34)
+    await asyncio.sleep(0.5)
 
-    # ── public API ────────────────────────────────────────────────────
+    take_screenshot(f"tab_{tab_name.replace(' ', '_').replace('-', '_')}")
+    await asyncio.sleep(0.3)
+    log.info(f"  ✓ Tab click sequence complete for '{tab_name}'")
 
-    async def navigate_to(self, target_index: int, force_reset: bool = True):
-        """Navigate to the tab at *target_index* (0-based).
 
-        Parameters
-        ----------
-        target_index : int
-            Index into ``TAB_NAMES`` (0 = Sub-surface … 11 = Export and load).
-        force_reset : bool
-            If True (default), always reset to tab 0 first.  Safest option.
-        """
-        if target_index < 0 or target_index >= NUM_TABS:
-            raise ValueError(f"Tab index {target_index} out of range 0..{NUM_TABS-1}")
-
-        target_name = TAB_NAMES[target_index]
-        log.info(f"▸ Navigating to tab {target_index} ({target_name}) …")
-
-        # Ensure Celsius is foreground
-        bring_window_to_front()
-
-        # Click somewhere safe in the Celsius content area first so that
-        # the keyboard focus is inside the Celsius window (not on a text
-        # field or button that might swallow Ctrl+Tab).
-        # We click the tab row area (Y ≈ 30) at a neutral X position.
-        rect = get_window_rect()
-        safe_x = rect[0] + 50
-        safe_y = rect[1] + 30
-        pyautogui.click(safe_x, safe_y)
-        await asyncio.sleep(0.3)
-
-        if force_reset or self._current_tab is None:
-            await self._reset_to_first_tab()
-            steps_needed = target_index
-        else:
-            # Compute shortest path from current tab
-            forward = (target_index - self._current_tab) % NUM_TABS
-            backward = (self._current_tab - target_index) % NUM_TABS
-            if forward <= backward:
-                steps_needed = forward
-            else:
-                steps_needed = -backward  # negative = backward
-
-        if steps_needed > 0:
-            log.info(f"  Pressing Ctrl+Tab {steps_needed}× …")
-            await self._press_ctrl_tab(steps_needed)
-        elif steps_needed < 0:
-            count = abs(steps_needed)
-            log.info(f"  Pressing Ctrl+Shift+Tab {count}× …")
-            await self._press_ctrl_shift_tab(count)
-        else:
-            log.info("  Already on target tab (0 presses needed)")
-
-        self._current_tab = target_index
-        log.info(f"  ✓ Should now be on tab {target_index} ({target_name})")
-
-        # Verification screenshot
-        take_screenshot(f"tab_{target_index}_{target_name.replace(' ','_')}")
-        await asyncio.sleep(0.5)
-
-    async def navigate_to_name(self, name: str, force_reset: bool = True):
-        """Navigate by tab name (case-insensitive partial match)."""
-        name_lower = name.lower()
-        for i, tn in enumerate(TAB_NAMES):
-            if name_lower in tn.lower():
-                return await self.navigate_to(i, force_reset=force_reset)
-        raise ValueError(f"Tab name '{name}' not found in {TAB_NAMES}")
+async def click_tab_by_index(index: int):
+    """Click a tab by its 0-based index."""
+    if index < 0 or index >= NUM_TABS:
+        raise ValueError(f"Tab index {index} out of range 0..{NUM_TABS-1}")
+    await click_tab(TAB_NAMES[index])
 
 
 # ╔═══════════════════════════════════════════════════════════════════════════╗
-# ║  CelsiusAutomation — the main automation class                          ║
+# ║  CelsiusAutomation                                                       ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
 
 class CelsiusAutomation:
-    """Controls Celsius Design using keyboard automation + pyautogui clicks
-    for buttons/icons (NOT for tabs)."""
+    """Controls Celsius Design using pyautogui mouse/keyboard automation."""
 
     def __init__(self):
         self.celsius_path = find_celsius_exe()
-        self.is_running = False
-        self.is_unlocked = False
-        self.tab_nav = TabNavigator()
+        self.is_running   = False
+        self.is_unlocked  = False
         log.info(f"Celsius path: {self.celsius_path}")
 
     def is_available(self):
@@ -489,27 +471,27 @@ class CelsiusAutomation:
         except ImportError:
             pywinauto_ok = False
         return {
-            "celsius_found": self.is_available(),
-            "celsius_path": self.celsius_path,
-            "pyautogui_installed": pyautogui_ok,
-            "pywinauto_installed": pywinauto_ok,
-            "is_running": self.is_running,
-            "is_unlocked": self.is_unlocked,
-            "work_dir": str(WORK_DIR),
+            "celsius_found":        self.is_available(),
+            "celsius_path":         self.celsius_path,
+            "pyautogui_installed":  pyautogui_ok,
+            "pywinauto_installed":  pywinauto_ok,
+            "is_running":           self.is_running,
+            "is_unlocked":          self.is_unlocked,
+            "work_dir":             str(WORK_DIR),
         }
 
     # ── helpers ───────────────────────────────────────────────────────
 
     def _scale(self, px_x, px_y):
-        """Scale a (px_x, px_y) reference coordinate (at 1920-px width)
-        to actual window coordinates."""
+        """Scale a (px_x, px_y) reference coordinate (1920-px width) to
+        actual window coordinates."""
         left, top, right, bottom = get_window_rect()
         win_w = right - left
         scale = win_w / 1920.0
         return left + int(px_x * scale), top + int(px_y * scale)
 
     async def _click_at(self, px_x, px_y, label="click"):
-        """Click at a 1920-ref pixel position, with logging + screenshot."""
+        """Click at a 1920-ref pixel position with logging + screenshot."""
         ax, ay = self._scale(px_x, px_y)
         log.info(f"Clicking [{label}] at screen ({ax},{ay})  "
                  f"[ref ({px_x},{px_y})]")
@@ -519,7 +501,7 @@ class CelsiusAutomation:
 
     async def _click_candidates(self, candidates, label="button",
                                  check_dialog=False, dialog_timeout=2.0):
-        """Try clicking a list of (px_x, px_y) candidates.
+        """Try clicking a list of (px_x, px_y) reference positions.
         If *check_dialog* is True, stop early when a file dialog appears."""
         for i, (px_x, px_y) in enumerate(candidates):
             ax, ay = self._scale(px_x, px_y)
@@ -528,14 +510,13 @@ class CelsiusAutomation:
             pyautogui.click(ax, ay)
             await asyncio.sleep(dialog_timeout if check_dialog else 0.8)
             take_screenshot(f"{label}_attempt_{i+1}")
-
             if check_dialog and self._file_dialog_visible():
                 log.info(f"File dialog detected after attempt {i+1}")
                 return True
         return False
 
     def _file_dialog_visible(self):
-        """Check whether a standard Windows file dialog is currently open."""
+        """Return True if a standard Windows file dialog is currently open."""
         found = False
 
         def _cb(hwnd, _):
@@ -544,12 +525,12 @@ class CelsiusAutomation:
                 if not win32gui.IsWindowVisible(hwnd):
                     return True
                 title = win32gui.GetWindowText(hwnd).lower()
-                cls = win32gui.GetClassName(hwnd)
-                if any(kw in title for kw in ["open", "save", "browse",
-                                               "select folder", "file name"]):
+                cls   = win32gui.GetClassName(hwnd)
+                if any(kw in title for kw in
+                       ["open", "save", "browse", "select folder", "file name"]):
                     found = True
                     return False
-                if cls == "#32770":  # Standard dialog class
+                if cls == "#32770":   # standard Windows dialog class
                     found = True
                     return False
             except Exception:
@@ -566,7 +547,7 @@ class CelsiusAutomation:
     # ── password dialog ───────────────────────────────────────────────
 
     def _find_password_dialog(self):
-        """Find the master_password.vi dialog.
+        """Find the master_password.vi dialog window.
         Returns (handle, rect) or (None, None)."""
         dialogs = []
 
@@ -575,18 +556,18 @@ class CelsiusAutomation:
                 if not win32gui.IsWindowVisible(hwnd):
                     return True
                 title = win32gui.GetWindowText(hwnd)
-                rect = win32gui.GetWindowRect(hwnd)
+                rect  = win32gui.GetWindowRect(hwnd)
                 l, t, r, b = rect
                 w, h = r - l, b - t
-                title_lower = title.lower()
-                is_pwd = any(kw in title_lower for kw in
+                tl   = title.lower()
+                is_pwd = any(kw in tl for kw in
                              ["master_password", "password", "unlock",
                               "celsius", "go,"])
-                is_dialog_size = 100 < w < 800 and 50 < h < 400
-                if title and (is_pwd or is_dialog_size):
+                is_small = 100 < w < 800 and 50 < h < 400
+                if title and (is_pwd or is_small):
                     dialogs.append((hwnd, title, rect, w, h))
                     log.debug(f"  Dialog candidate: '{title}' "
-                              f"hwnd={hwnd} rect={rect} {w}x{h}")
+                              f"hwnd={hwnd} {w}x{h}")
             except Exception:
                 pass
             return True
@@ -597,15 +578,15 @@ class CelsiusAutomation:
             except Exception:
                 pass
 
-        # Prefer windows with password-related keywords
+        # Prefer windows with password-specific keywords
         for hwnd, title, rect, w, h in dialogs:
             tl = title.lower()
-            if any(kw in tl for kw in ["master_password", "password",
-                                        "unlock"]):
-                log.info(f"Password dialog found: '{title}' rect={rect}")
+            if any(kw in tl for kw in
+                   ["master_password", "password", "unlock"]):
+                log.info(f"Password dialog: '{title}' rect={rect}")
                 return hwnd, rect
 
-        # Fallback: any small Celsius-related dialog
+        # Fallback: any small Celsius-related window
         for hwnd, title, rect, w, h in dialogs:
             tl = title.lower()
             if any(kw in tl for kw in ["celsius", "go,"]):
@@ -618,136 +599,97 @@ class CelsiusAutomation:
     async def _enter_password(self):
         """Enter the master password into the Celsius password dialog.
 
-        Known dialog layout (master_password.vi):
-        - Rect ≈ (661, 507, 1260, 645) = 599 × 138
-        - Password field: ~18% from left, ~25% from top of dialog
-        - Unlock button:  ~9% from left, ~65% from top of dialog
+        Confirmed working approach:
+        1. Set clipboard with the password FIRST (before any window switching).
+        2. Find the password dialog via EnumWindows.
+        3. force_foreground() with AttachThreadInput to bring it to front.
+        4. Click the password field at 45% from left, 35% from top of dialog.
+        5. Triple-click to select all existing text.
+        6. Ctrl+V to paste from clipboard.
+        7. Press Enter to submit.
 
-        Strategy:
-        1. Set clipboard with password FIRST
-        2. Find and bring dialog to front
-        3. Click password field → Ctrl+A → Ctrl+V (paste)
-        4. Backup: type character-by-character
-        5. Press Enter / click Unlock
+        No character-by-character backup — it appended duplicate text.
         """
         await asyncio.sleep(2)
         take_screenshot("before_password")
 
-        # ── Step 1: Set clipboard ──
+        # ── 1. Set clipboard FIRST ──────────────────────────────────────
         log.info("Setting clipboard with password …")
         set_clipboard(CELSIUS_PASSWORD)
         await asyncio.sleep(0.3)
 
-        # ── Step 2: Find and focus the password dialog ──
+        # ── 2. Find the password dialog ─────────────────────────────────
+        # Give LabVIEW a moment to show the dialog after launch
         dialog_handle, dialog_rect = self._find_password_dialog()
 
+        # Retry up to 5 times if not found yet
+        for attempt in range(5):
+            if dialog_handle:
+                break
+            log.info(f"Password dialog not found yet, retrying ({attempt+1}/5) …")
+            await asyncio.sleep(1.5)
+            dialog_handle, dialog_rect = self._find_password_dialog()
+
+        # ── 3. Bring dialog to front ────────────────────────────────────
         if dialog_handle:
-            log.info(f"Password dialog handle={dialog_handle} rect={dialog_rect}")
-            _ensure_foreground(dialog_handle)
+            log.info(f"Password dialog found: hwnd={dialog_handle} rect={dialog_rect}")
+            force_foreground(dialog_handle)
             await asyncio.sleep(0.5)
         else:
-            log.warning("Password dialog not found by handle — "
-                        "trying screen-center approach")
+            log.warning("Password dialog not found — using screen-centre fallback")
 
         take_screenshot("password_dialog_focused")
 
-        # ── Step 3: Determine click coordinates ──
+        # ── 4. Determine field coordinates ──────────────────────────────
         if dialog_rect:
             l, t, r, b = dialog_rect
             dlg_w, dlg_h = r - l, b - t
-            # Password field: 18% from left, 25% from top
-            field_x = l + int(dlg_w * 0.18)
-            field_y = t + int(dlg_h * 0.25)
-            # Unlock button: 9% from left, 65% from top
-            unlock_x = l + int(dlg_w * 0.09)
-            unlock_y = t + int(dlg_h * 0.65)
+            # Confirmed: field at 45% from left, 35% from top
+            field_x = l + int(dlg_w * 0.45)
+            field_y = t + int(dlg_h * 0.35)
         else:
-            # Fallback: assume dialog is centred on a 1920×1200 screen
-            screen_w, screen_h = pyautogui.size()
-            cx, cy = screen_w // 2, screen_h // 2
-            field_x = cx - 100
-            field_y = cy - 20
-            unlock_x = cx - 140
-            unlock_y = cy + 30
+            # Fallback: assume dialog centred on 1920×1200
+            sw, sh   = pyautogui.size()
+            field_x  = sw // 2
+            field_y  = sh // 2 - 10
 
-        # ── Step 4: Click the password field ──
-        log.info(f"Clicking password field at ({field_x}, {field_y}) …")
+        log.info(f"Password field target: ({field_x}, {field_y})")
+
+        # ── 5. Click the password field ──────────────────────────────────
         pyautogui.click(field_x, field_y)
         await asyncio.sleep(0.4)
-        # Also try a few nearby Y offsets to be safe
-        for dy in [-10, 0, 10]:
-            pyautogui.click(field_x, field_y + dy)
-            await asyncio.sleep(0.1)
+
+        # ── 6. Triple-click to select all existing text ──────────────────
+        log.info("Triple-clicking to select all …")
+        pyautogui.click(field_x, field_y, clicks=3, interval=0.1)
         await asyncio.sleep(0.3)
 
-        # Select-all and clear
-        pyautogui.hotkey("ctrl", "a")
-        await asyncio.sleep(0.15)
-        pyautogui.press("delete")
-        await asyncio.sleep(0.15)
-
-        # ── Step 5: Paste password ──
+        # ── 7. Paste password ────────────────────────────────────────────
         log.info("Pasting password via Ctrl+V …")
         pyautogui.hotkey("ctrl", "v")
         await asyncio.sleep(0.8)
         take_screenshot("after_paste_password")
 
-        # ── Step 6: Backup — type character by character ──
-        log.info("Backup: re-typing password character-by-character …")
-        pyautogui.click(field_x, field_y)
-        await asyncio.sleep(0.2)
-        pyautogui.hotkey("ctrl", "a")
-        await asyncio.sleep(0.1)
-
-        for ch in CELSIUS_PASSWORD:
-            if ch.isupper():
-                pyautogui.hotkey("shift", ch.lower())
-            elif ch == "!":
-                pyautogui.hotkey("shift", "1")
-            elif ch == ",":
-                pyautogui.press(",")
-            elif ch == " ":
-                pyautogui.press("space")
-            else:
-                pyautogui.press(ch)
-            await asyncio.sleep(0.04)
-        await asyncio.sleep(0.5)
-        take_screenshot("after_type_password")
-
-        # ── Step 7: Submit — Enter then click Unlock ──
+        # ── 8. Submit with Enter ─────────────────────────────────────────
         log.info("Pressing Enter to submit password …")
         pyautogui.press("enter")
-        await asyncio.sleep(2)
-
-        # Also click the Unlock button area
-        log.info(f"Clicking Unlock button at ({unlock_x}, {unlock_y}) …")
-        pyautogui.click(unlock_x, unlock_y)
-        await asyncio.sleep(0.5)
-        # Try a few nearby positions
-        for dx in [-30, 0, 30, 60]:
-            pyautogui.click(unlock_x + dx, unlock_y)
-            await asyncio.sleep(0.2)
-
-        pyautogui.press("enter")
         await asyncio.sleep(3)
+        take_screenshot("after_enter_password")
 
-        take_screenshot("after_unlock_attempt")
-
-        # ── Step 8: Check for "Wrong password" dialog ──
-        wrong_handle, wrong_rect = self._find_password_dialog()
-        if wrong_handle:
-            log.warning("Password dialog still visible — may have failed. "
-                        "Trying Enter again …")
-            _ensure_foreground(wrong_handle)
+        # ── 9. Check if dialog is still open (wrong password?) ───────────
+        still_open, _ = self._find_password_dialog()
+        if still_open:
+            log.warning("Password dialog still visible after Enter — "
+                        "pressing Enter again and Escape …")
+            force_foreground(still_open)
             await asyncio.sleep(0.3)
             pyautogui.press("enter")
-            await asyncio.sleep(2)
-            # Try clicking Cancel / OK on any error dialog
+            await asyncio.sleep(1)
             pyautogui.press("escape")
             await asyncio.sleep(1)
 
         self.is_unlocked = True
-        log.info("Password entry sequence complete")
+        log.info("Password entry complete")
 
     # ── launch ────────────────────────────────────────────────────────
 
@@ -758,7 +700,7 @@ class CelsiusAutomation:
         if info:
             handle, name, rect = info
             log.info(f"Celsius already running: '{name}'")
-            _ensure_foreground(handle)
+            force_foreground(handle)
             self.is_running = True
             await asyncio.sleep(1)
         else:
@@ -772,7 +714,7 @@ class CelsiusAutomation:
                 log.error(f"Launch failed: {e}")
                 return {"status": "error", "message": str(e)}
 
-            # Wait for window
+            # Wait for window to appear (up to 60 s)
             log.info("Waiting for Celsius window …")
             for i in range(60):
                 await asyncio.sleep(1)
@@ -784,7 +726,7 @@ class CelsiusAutomation:
                 return {"status": "error",
                         "message": "Timeout: Celsius window not found after 60s"}
 
-            _ensure_foreground(info[0])
+            force_foreground(info[0])
             self.is_running = True
             await asyncio.sleep(2)
 
@@ -792,30 +734,30 @@ class CelsiusAutomation:
         log.info("Handling password dialog …")
         await self._enter_password()
 
-        # Bring main window to front and maximize
+        # Bring main window to front and maximise
         await asyncio.sleep(2)
-        handle = bring_window_to_front(do_maximize=True)
+        handle = bring_to_front(do_maximize=True)
         await asyncio.sleep(1)
-        _ensure_maximized(handle)
+        ensure_maximized(handle)
         take_screenshot("after_launch_maximized")
 
         return {"status": "success", "message": "Celsius launched and unlocked"}
 
-    # ── file dialog interaction ───────────────────────────────────────
+    # ── file dialog ───────────────────────────────────────────────────
 
     async def _browse_and_select_file(self, file_path):
         """Handle a standard Windows Open / Save file dialog.
-        Uses Alt+N to focus filename field, pastes the path, presses Enter."""
+        Uses Alt+N to focus the filename field, pastes the path, presses Enter."""
         await asyncio.sleep(1.5)
         log.info(f"File dialog: selecting '{file_path}'")
         take_screenshot("file_dialog_opened")
 
-        # Focus filename field
+        # Focus filename field with Alt+N
         log.info("Focusing filename field with Alt+N …")
         pyautogui.hotkey("alt", "n")
         await asyncio.sleep(0.5)
 
-        # Clear and paste path
+        # Select all and paste path
         pyautogui.hotkey("ctrl", "a")
         await asyncio.sleep(0.15)
         set_clipboard(str(file_path))
@@ -826,10 +768,9 @@ class CelsiusAutomation:
         take_screenshot("file_dialog_path_pasted")
 
         # Confirm
-        log.info("Pressing Enter to confirm …")
         pyautogui.press("enter")
         await asyncio.sleep(1.5)
-        # Second Enter in case of confirmation prompt
+        # Second Enter in case of a confirmation prompt
         pyautogui.press("enter")
         await asyncio.sleep(1)
         log.info("File dialog interaction complete")
@@ -840,30 +781,29 @@ class CelsiusAutomation:
         """Load an INI file into Celsius via the 'Export and load' tab.
 
         Steps:
-        1. Navigate to Export and load tab (index 11) via Ctrl+Tab
+        1. Click 'Export and load' tab (confirmed x=889, y sweep 28-40)
         2. Click the Load config folder icon → Windows file dialog
-        3. Select the INI file in the dialog
+        3. Select the INI file
         4. Click the LOAD button
         """
         log.info(f"═══ LOAD INI: {ini_path} ═══")
-        bring_window_to_front()
+        bring_to_front()
         await asyncio.sleep(0.3)
-        _ensure_maximized()
+        ensure_maximized()
         await asyncio.sleep(0.3)
 
         try:
-            # Step 1: Navigate to "Export and load" (tab 11)
-            await self.tab_nav.navigate_to(11, force_reset=True)
+            # Step 1: Navigate to "Export and load" tab
+            await click_tab("Export and load")
             await asyncio.sleep(1)
 
             # Step 2: Click the folder icon for "Load config file"
-            # Try the estimated position first, then nearby positions
             load_folder_candidates = [
-                EXPORT_TAB_LOAD_FOLDER_ICON,                          # (920, 370)
-                (920, 350), (920, 390),                               # Y variants
-                (900, 370), (940, 370),                               # X variants
-                (880, 370), (960, 370),                               # wider X
-                (920, 330), (920, 410),                               # wider Y
+                EXPORT_TAB_LOAD_FOLDER_ICON,        # (920, 370)
+                (920, 350), (920, 390),
+                (900, 370), (940, 370),
+                (880, 370), (960, 370),
+                (920, 330), (920, 410),
             ]
             dialog_opened = await self._click_candidates(
                 load_folder_candidates,
@@ -871,27 +811,22 @@ class CelsiusAutomation:
                 check_dialog=True,
                 dialog_timeout=2.0,
             )
-
             if not dialog_opened:
-                log.warning("File dialog did NOT open after clicking folder "
-                            "icon candidates — trying anyway …")
+                log.warning("File dialog did not open — proceeding anyway")
 
-            # Step 3: Handle the file dialog
+            # Step 3: Handle file dialog
             await self._browse_and_select_file(ini_path)
             await asyncio.sleep(2)
 
             # Step 4: Click the LOAD button
             load_btn_candidates = [
-                EXPORT_TAB_LOAD_BUTTON,                               # (1050, 370)
+                EXPORT_TAB_LOAD_BUTTON,             # (1050, 370)
                 (1050, 350), (1050, 390),
                 (1030, 370), (1070, 370),
                 (1080, 370), (1020, 370),
                 (1050, 330), (1050, 410),
             ]
-            await self._click_candidates(
-                load_btn_candidates,
-                label="load_button",
-            )
+            await self._click_candidates(load_btn_candidates, label="load_button")
             await asyncio.sleep(3)
             take_screenshot("after_load_ini")
 
@@ -909,19 +844,19 @@ class CelsiusAutomation:
         'Well placement' tab.
 
         Steps:
-        1. Navigate to Well placement tab (index 1) via Ctrl+Tab
-        2. Click the Optimize placement button (try multiple positions)
-        3. Wait ~90-100 s for completion
+        1. Click 'Well placement' tab (confirmed x=113, y sweep 28-40)
+        2. Click the Optimize placement button (multiple candidate positions)
+        3. Wait ~100 s for completion
         """
         log.info("═══ RUN SIMULATION ═══")
-        bring_window_to_front()
+        bring_to_front()
         await asyncio.sleep(0.3)
-        _ensure_maximized()
+        ensure_maximized()
         await asyncio.sleep(0.3)
 
         try:
-            # Step 1: Navigate to "Well placement" (tab 1)
-            await self.tab_nav.navigate_to(1, force_reset=True)
+            # Step 1: Navigate to "Well placement" tab
+            await click_tab("Well placement")
             await asyncio.sleep(1)
 
             # Step 2: Click "Optimize placement" button
@@ -958,25 +893,25 @@ class CelsiusAutomation:
         """Export results INI from Celsius.
 
         Steps:
-        1. Navigate to Export and load tab (index 11) via Ctrl+Tab
+        1. Click 'Export and load' tab (confirmed x=889, y sweep 28-40)
         2. Click the Export config folder icon → Windows Save dialog
-        3. Set the output path in the dialog
+        3. Set the output path
         4. Click the SAVE button
         """
         log.info(f"═══ EXPORT RESULTS → {output_path} ═══")
-        bring_window_to_front()
+        bring_to_front()
         await asyncio.sleep(0.3)
-        _ensure_maximized()
+        ensure_maximized()
         await asyncio.sleep(0.3)
 
         try:
-            # Step 1: Navigate to "Export and load" (tab 11)
-            await self.tab_nav.navigate_to(11, force_reset=True)
+            # Step 1: Navigate to "Export and load" tab
+            await click_tab("Export and load")
             await asyncio.sleep(1)
 
             # Step 2: Click the folder icon for "Export config file"
             export_folder_candidates = [
-                EXPORT_TAB_SAVE_FOLDER_ICON,                          # (920, 280)
+                EXPORT_TAB_SAVE_FOLDER_ICON,        # (920, 280)
                 (920, 260), (920, 300),
                 (900, 280), (940, 280),
                 (880, 280), (960, 280),
@@ -988,31 +923,26 @@ class CelsiusAutomation:
                 check_dialog=True,
                 dialog_timeout=2.0,
             )
-
             if not dialog_opened:
-                log.warning("Save dialog did NOT open after clicking export "
-                            "folder icon candidates — trying anyway …")
+                log.warning("Save dialog did not open — proceeding anyway")
 
-            # Step 3: Handle the Save dialog
+            # Step 3: Handle Save dialog
             await self._browse_and_select_file(output_path)
             await asyncio.sleep(2)
 
             # Step 4: Click the SAVE button
             save_btn_candidates = [
-                EXPORT_TAB_SAVE_BUTTON,                               # (1050, 280)
+                EXPORT_TAB_SAVE_BUTTON,             # (1050, 280)
                 (1050, 260), (1050, 300),
                 (1030, 280), (1070, 280),
                 (1080, 280), (1020, 280),
                 (1050, 240), (1050, 320),
             ]
-            await self._click_candidates(
-                save_btn_candidates,
-                label="save_button",
-            )
+            await self._click_candidates(save_btn_candidates, label="save_button")
             await asyncio.sleep(3)
             take_screenshot("after_export")
 
-            # Check if file was created
+            # Verify file was created
             for ext in ["", ".ini"]:
                 p = Path(str(output_path) + ext)
                 if p.exists():
@@ -1035,80 +965,72 @@ class CelsiusAutomation:
 class KelvinAgentServer:
     """HTTP server bridging the Kelvin frontend to Celsius automation."""
 
-    def __init__(self):
-        self.celsius = CelsiusAutomation()
-        self.current_job = None
-
-    # ── CORS headers ──────────────────────────────────────────────────
-
     CORS = {
-        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Origin":  "*",
         "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type",
     }
 
-    # ── request handler ───────────────────────────────────────────────
+    def __init__(self):
+        self.celsius     = CelsiusAutomation()
+        self.current_job = None
 
     async def handle_http(self, request):
         import aiohttp.web as web
 
-        path = request.path
+        path    = request.path
         headers = dict(self.CORS)
 
-        # ── OPTIONS (CORS preflight) ──
+        # CORS preflight
         if request.method == "OPTIONS":
             return web.Response(status=200, headers=headers)
 
-        # ── GET /status ──
+        # ── GET /status ──────────────────────────────────────────────
         if path == "/status":
             status = self.celsius.get_status()
-            status["agent_version"] = "3.0.0"
-            status["current_job"] = self.current_job
+            status["agent_version"] = "4.0.0"
+            status["current_job"]   = self.current_job
             return web.json_response(status, headers=headers)
 
-        # ── POST /run  (full pipeline) ──
+        # ── POST /run ────────────────────────────────────────────────
         if path == "/run" and request.method == "POST":
             try:
-                data = await request.json()
+                data        = await request.json()
                 ini_content = data.get("ini", "")
-                job_id = data.get("job_id",
-                                  datetime.now().strftime("%Y%m%d_%H%M%S"))
+                job_id      = data.get("job_id",
+                                       datetime.now().strftime("%Y%m%d_%H%M%S"))
                 if not ini_content:
                     return web.json_response(
-                        {"error": "No INI content"}, status=400,
-                        headers=headers)
+                        {"error": "No INI content"}, status=400, headers=headers)
 
                 ini_path = INPUT_DIR / f"kelvin_{job_id}.ini"
                 ini_path.write_text(ini_content, encoding="utf-8")
                 log.info(f"Received INI ({len(ini_content)} chars) → {ini_path}")
 
                 self.current_job = {
-                    "id": job_id,
-                    "status": "starting",
-                    "ini_path": str(ini_path),
+                    "id":         job_id,
+                    "status":     "starting",
+                    "ini_path":   str(ini_path),
                     "started_at": datetime.now().isoformat(),
-                    "steps": [],
+                    "steps":      [],
                 }
                 asyncio.create_task(self._run_pipeline(job_id, ini_path))
                 return web.json_response(
-                    {"status": "accepted", "job_id": job_id},
-                    headers=headers)
+                    {"status": "accepted", "job_id": job_id}, headers=headers)
             except Exception as e:
                 return web.json_response(
                     {"error": str(e)}, status=500, headers=headers)
 
-        # ── GET /job ──
+        # ── GET /job ─────────────────────────────────────────────────
         if path == "/job":
             if not self.current_job:
-                return web.json_response({"status": "no_job"},
-                                         headers=headers)
+                return web.json_response({"status": "no_job"}, headers=headers)
             return web.json_response(self.current_job, headers=headers)
 
-        # ── GET /results ──
+        # ── GET /results ─────────────────────────────────────────────
         if path == "/results":
             if not self.current_job or self.current_job["status"] != "complete":
-                return web.json_response({"status": "not_ready"},
-                                         headers=headers)
+                return web.json_response({"status": "not_ready"}, headers=headers)
             result_path = self.current_job.get("result_path")
             if result_path and Path(result_path).exists():
                 content = Path(result_path).read_text(encoding="utf-8")
@@ -1120,13 +1042,13 @@ class KelvinAgentServer:
                 {"status": "error", "message": "Result file not found"},
                 headers=headers)
 
-        # ── Manual step endpoints (debugging / manual control) ──
+        # ── Manual step endpoints (debugging / manual control) ────────
         if path == "/launch" and request.method == "POST":
             result = await self.celsius.launch_and_unlock()
             return web.json_response(result, headers=headers)
 
         if path == "/load" and request.method == "POST":
-            data = await request.json()
+            data   = await request.json()
             result = await self.celsius.load_ini_file(data.get("path", ""))
             return web.json_response(result, headers=headers)
 
@@ -1135,7 +1057,7 @@ class KelvinAgentServer:
             return web.json_response(result, headers=headers)
 
         if path == "/export" and request.method == "POST":
-            data = await request.json()
+            data   = await request.json()
             result = await self.celsius.export_results(
                 data.get("path", str(OUTPUT_DIR / "results")))
             return web.json_response(result, headers=headers)
@@ -1152,14 +1074,14 @@ class KelvinAgentServer:
             try:
                 tail = int(request.query.get("tail", 200))
                 if LOG_FILE.exists():
-                    lines = LOG_FILE.read_text(encoding="utf-8").splitlines()
+                    lines      = LOG_FILE.read_text(encoding="utf-8").splitlines()
                     tail_lines = lines[-tail:] if len(lines) > tail else lines
                     return web.json_response({
-                        "status": "ok",
-                        "log_file": str(LOG_FILE),
+                        "status":      "ok",
+                        "log_file":    str(LOG_FILE),
                         "total_lines": len(lines),
-                        "showing": len(tail_lines),
-                        "lines": tail_lines,
+                        "showing":     len(tail_lines),
+                        "lines":       tail_lines,
                     }, headers=headers)
                 return web.json_response(
                     {"status": "error", "message": "Log file not found"},
@@ -1171,14 +1093,13 @@ class KelvinAgentServer:
             try:
                 files = []
                 for f in sorted(LOG_DIR.iterdir(),
-                                key=lambda p: p.stat().st_mtime,
-                                reverse=True):
+                                key=lambda p: p.stat().st_mtime, reverse=True):
                     files.append({
-                        "name": f.name,
-                        "size": f.stat().st_size,
+                        "name":     f.name,
+                        "size":     f.stat().st_size,
                         "modified": datetime.fromtimestamp(
                             f.stat().st_mtime).isoformat(),
-                        "path": str(f),
+                        "path":     str(f),
                     })
                 return web.json_response(
                     {"status": "ok", "files": files[:50]}, headers=headers)
@@ -1244,11 +1165,10 @@ class KelvinAgentServer:
                 self.current_job["result_path"] = str(result_file)
                 step("export", "done", f"Saved: {result_file}")
             else:
-                step("export", "warning",
-                     "Export sent but file not confirmed")
+                step("export", "warning", "Export sent but file not confirmed")
                 self.current_job["result_path"] = str(output_path) + ".ini"
 
-            self.current_job["status"] = "complete"
+            self.current_job["status"]       = "complete"
             self.current_job["completed_at"] = datetime.now().isoformat()
             log.info(f"[{job_id}] Pipeline complete!")
 
@@ -1263,12 +1183,9 @@ class KelvinAgentServer:
         import aiohttp.web as web
 
         app = web.Application()
-        routes = [
-            "/status", "/run", "/job", "/results",
-            "/launch", "/load", "/simulate", "/export",
-            "/screenshot", "/log", "/logs",
-        ]
-        for route in routes:
+        for route in ["/status", "/run", "/job", "/results",
+                      "/launch", "/load", "/simulate", "/export",
+                      "/screenshot", "/log", "/logs"]:
             app.router.add_route("*", route, self.handle_http)
 
         runner = web.AppRunner(app)
@@ -1277,13 +1194,13 @@ class KelvinAgentServer:
         await site.start()
 
         log.info("=" * 64)
-        log.info(f"  Project Kelvin Agent v3.0 (Ctrl+Tab navigation)")
+        log.info(f"  Project Kelvin Agent v4.0 (confirmed tab click coords)")
         log.info(f"  Server: http://localhost:{AGENT_PORT}")
         log.info(f"  Celsius: {self.celsius.celsius_path}")
         log.info(f"  Work dir: {WORK_DIR}")
         log.info(f"")
-        log.info(f"  Tab navigation: Ctrl+Tab / Ctrl+Shift+Tab ONLY")
-        log.info(f"  Tabs: {NUM_TABS} tabs, 0-indexed")
+        log.info(f"  Tab navigation: direct mouse click at confirmed X coords")
+        log.info(f"  Y sweep: {TAB_Y_VALUES} px from window top")
         log.info(f"")
         log.info(f"  Pipeline: POST /run  (send INI, auto-run everything)")
         log.info(f"  Manual:   POST /launch, /load, /simulate, /export")
@@ -1319,7 +1236,7 @@ def check_deps():
 
 
 if __name__ == "__main__":
-    log.info("Project Kelvin Agent v3.0 starting …")
+    log.info("Project Kelvin Agent v4.0 starting …")
     check_deps()
     server = KelvinAgentServer()
     try:
