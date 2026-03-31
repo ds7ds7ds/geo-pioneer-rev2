@@ -1,30 +1,31 @@
 """
 Project Kelvin — Local Agent for Celsius Design v6.2d Automation
 =================================================================
-v4.1 — Production rebuild using DIRECT MOUSE CLICKS at confirmed tab
-       coordinates.  Python aiohttp async HTTP server + pyautogui.
+v4.2 — Updated with ALL 12 confirmed tab coordinates (Mar 31 2026)
+       and confirmed Export and load tab button positions from screenshot.
+       Python aiohttp async HTTP server + pyautogui.
 
 Proven working approach (from v4.0 log analysis, 2026-03-30):
   - Password dialog found as separate window 'master_password.vi'
     with real rect (661, 507, 1260, 645) while main window shows (0,0,0,0).
   - Clipboard set via clip.exe → triple-click → Ctrl+V → Enter.
-  - Tab clicks at confirmed screen-absolute X coords, Y swept 28–40.
+  - Tab clicks at confirmed screen-absolute X coords, Y swept 30–44.
   - Simulation completed in 101 s.
   - File dialogs handled via Alt+N → Ctrl+A → Ctrl+V → Enter.
 
 Tab positions (screen-absolute, window maximised to 1920×1080+taskbar):
-    Sub-surface:              x=40,  y=34
-    Well placement:           x=113, y=34  ← CONFIRMED
-    Building loads:           x=192, y=34  ← CONFIRMED
-    Energy production:        x=271, y=34
-    Heat pumps:               x=350, y=34
-    Optimize length:          x=426, y=34
-    Hourly plots:             x=500, y=34
-    Results -Heat pump loads: x=593, y=34
-    More results:             x=687, y=34
-    Yearly results:           x=755, y=34
-    Economics:                x=820, y=34
-    Export and load:          x=889, y=34
+    Sub-surface:              x=40,   y sweep 30-44  ← CONFIRMED
+    Well placement:           x=113,  y sweep 30-44  ← CONFIRMED
+    Building loads:           x=192,  y sweep 30-44  ← CONFIRMED
+    Energy production:        x=271,  y sweep 30-44  ← CONFIRMED
+    Heat pumps:               x=350,  y sweep 30-44  ← CONFIRMED
+    Optimize length:          x=426,  y sweep 30-44  ← CONFIRMED
+    Hourly plots:             x=530,  y sweep 30-44  ← CONFIRMED
+    Results-Heat pump loads:  x=660,  y sweep 30-44  ← CONFIRMED
+    More results:             x=810,  y sweep 30-44  ← CONFIRMED
+    Yearly results:           x=1000, y sweep 30-44  ← CONFIRMED
+    Economics:                x=1100, y sweep 30-44  ← CONFIRMED
+    Export and load:          x=1210, y sweep 30-44  ← CONFIRMED
 
 Requirements:
     pip install pyautogui aiohttp pywinauto Pillow
@@ -67,7 +68,7 @@ except ImportError:
 # ║  Configuration                                                           ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
 
-AGENT_VERSION   = "4.1.0"
+AGENT_VERSION   = "4.2.0"
 AGENT_PORT      = 8765
 WORK_DIR        = Path.home() / "KelvinAgent"
 INPUT_DIR       = WORK_DIR / "input"
@@ -82,35 +83,70 @@ TITLE_RE = r".*[Cc]elsius.*|.*master_password.*"
 
 # ---------------------------------------------------------------------------
 #  Confirmed tab positions (screen coords, window maximised to 1920×1080)
+#  All 12 tabs confirmed working — Mar 31 2026.
 # ---------------------------------------------------------------------------
 TAB_POSITIONS = {
-    "Sub-surface":              40,
-    "Well placement":           113,
-    "Building loads":           192,
-    "Energy production":        271,
-    "Heat pumps":               350,
-    "Optimize length":          426,
-    "Hourly plots":             500,
-    "Results -Heat pump loads": 593,
-    "More results":             687,
-    "Yearly results":           755,
-    "Economics":                820,
-    "Export and load":          889,
+    "Sub-surface":               40,
+    "Well placement":            113,
+    "Building loads":            192,
+    "Energy production":         271,
+    "Heat pumps":                350,
+    "Optimize length":           426,
+    "Hourly plots":              530,
+    "Results-Heat pump loads":   660,
+    "More results":              810,
+    "Yearly results":            1000,
+    "Economics":                 1100,
+    "Export and load":           1210,
 }
-TAB_Y_VALUES = [28, 30, 32, 34, 36, 38, 40]
+TAB_Y_VALUES = [30, 32, 34, 36, 38, 40, 42, 44]
 
+# Legacy alias used in some log messages — keep both spellings consistent
+TAB_NAME_ALIASES = {
+    "Results -Heat pump loads": "Results-Heat pump loads",
+    "Results-Heat pump loads":  "Results-Heat pump loads",
+}
 TAB_NAMES = list(TAB_POSITIONS.keys())
 NUM_TABS  = len(TAB_NAMES)
 
 # Simulation wait time (seconds)
 SIMULATION_WAIT = 100
 
-# Button positions (1920-px reference, unverified — agent tries a grid)
-EXPORT_TAB_LOAD_FOLDER_ICON = (920, 370)
-EXPORT_TAB_LOAD_BUTTON      = (1050, 370)
-EXPORT_TAB_SAVE_FOLDER_ICON = (920, 280)
-EXPORT_TAB_SAVE_BUTTON      = (1050, 280)
+# ---------------------------------------------------------------------------
+#  Export and load tab — CONFIRMED button positions from screenshot
+#  (1920-px reference, window maximised to 1920×1080)
+# ---------------------------------------------------------------------------
+#  Row layout (Y positions confirmed from screenshot):
+#    Y≈157  Working directory folder icon
+#    Y≈204  Export config file (.ini) — path field (600,204), SAVE (762,204)
+#    Y≈252  Load config file          — path field (600,252), LOAD (762,252)
+#    Y≈301  Save results to file      — path field (600,301), SAVE (762,301)
 
+# Load config file row
+EXPORT_TAB_LOAD_FOLDER_ICON = (738, 252)   # folder icon left of path field
+EXPORT_TAB_LOAD_BUTTON      = (762, 252)   # LOAD button (confirmed)
+EXPORT_TAB_LOAD_PATH_FIELD  = (600, 252)   # path text field
+
+# Export config file (.ini) row
+EXPORT_TAB_SAVE_FOLDER_ICON = (738, 204)   # folder icon left of path field
+EXPORT_TAB_SAVE_BUTTON      = (762, 204)   # SAVE button (confirmed)
+EXPORT_TAB_SAVE_PATH_FIELD  = (600, 204)   # path text field
+
+# Save results to file row
+EXPORT_TAB_RESULTS_FOLDER_ICON = (738, 301)   # folder icon
+EXPORT_TAB_RESULTS_SAVE_BUTTON = (762, 301)   # SAVE button (confirmed)
+EXPORT_TAB_RESULTS_PATH_FIELD  = (600, 301)   # path text field
+
+# Working directory row
+EXPORT_TAB_WORKDIR_FOLDER_ICON = (738, 157)   # folder icon
+
+# Top toolbar buttons on Export and load tab
+EXPORT_TAB_EXPORT_BUTTON    = (505, 95)    # "Export" button
+EXPORT_TAB_WORD_BUTTON      = (555, 95)    # "W" Word export button
+EXPORT_TAB_BUG_BUTTON       = (660, 95)    # "Report a bug" button
+
+# Optimize placement button on Well placement tab (position to be confirmed
+# from screenshot — try a grid of candidates around the expected area)
 OPTIMIZE_BUTTON_CANDIDATES = [
     (160, 170),
     (160, 200),
@@ -118,6 +154,9 @@ OPTIMIZE_BUTTON_CANDIDATES = [
     (200, 170),
     (120, 170),
     (160, 230),
+    (200, 200),
+    (200, 140),
+    (120, 200),
 ]
 
 # ---------------------------------------------------------------------------
@@ -795,11 +834,11 @@ class CelsiusAutomation:
     async def load_ini_file(self, ini_path):
         """Load an INI file into Celsius via the 'Export and load' tab.
 
-        Steps (from v4 logs):
-        1. Click 'Export and load' tab (x=889, y sweep 28-40)
-        2. Click the Load config folder icon → Windows file dialog
+        Steps:
+        1. Click 'Export and load' tab (x=1210, y sweep 30-44)  ← CONFIRMED
+        2. Click the Load config folder icon at (738,252) → file dialog
         3. Select the INI file via Alt+N, Ctrl+V, Enter
-        4. Click the LOAD button
+        4. Click the LOAD button at (762,252)  ← CONFIRMED
         """
         log.info(f"═══ LOAD INI: {ini_path} ═══")
         bring_to_front()
@@ -813,13 +852,14 @@ class CelsiusAutomation:
             await asyncio.sleep(1)
 
             # Step 2: Click the folder icon for "Load config file"
-            # Grid: center, ±20y, ±20x, ±40x, ±40y
+            # CONFIRMED position: (738, 252) from screenshot.
+            # Also try a tight grid around it in case of minor offset.
             load_folder_candidates = [
-                EXPORT_TAB_LOAD_FOLDER_ICON,        # (920, 370)
-                (920, 350), (920, 390),
-                (900, 370), (940, 370),
-                (880, 370), (960, 370),
-                (920, 330), (920, 410),
+                EXPORT_TAB_LOAD_FOLDER_ICON,        # (738, 252) CONFIRMED
+                (738, 242), (738, 262),
+                (728, 252), (748, 252),
+                (718, 252), (758, 252),
+                (738, 232), (738, 272),
             ]
             dialog_opened = await self._click_candidates(
                 load_folder_candidates,
@@ -835,12 +875,13 @@ class CelsiusAutomation:
             await asyncio.sleep(2)
 
             # Step 4: Click the LOAD button
+            # CONFIRMED position: (762, 252) from screenshot.
             load_btn_candidates = [
-                EXPORT_TAB_LOAD_BUTTON,             # (1050, 370)
-                (1050, 350), (1050, 390),
-                (1030, 370), (1070, 370),
-                (1080, 370), (1020, 370),
-                (1050, 330), (1050, 410),
+                EXPORT_TAB_LOAD_BUTTON,             # (762, 252) CONFIRMED
+                (762, 242), (762, 262),
+                (752, 252), (772, 252),
+                (742, 252), (782, 252),
+                (762, 232), (762, 272),
             ]
             await self._click_candidates(
                 load_btn_candidates, label="load_button")
@@ -861,9 +902,9 @@ class CelsiusAutomation:
         """Run the simulation by clicking 'Optimize placement' on the
         'Well placement' tab.
 
-        Steps (from v4 logs):
-        1. Click 'Well placement' tab (x=113, y sweep 28-40)
-        2. Click the Optimize placement button (6 candidate positions)
+        Steps:
+        1. Click 'Well placement' tab (x=113, y sweep 30-44)  ← CONFIRMED
+        2. Click the Optimize placement button (9 candidate positions)
         3. Wait ~100 s for completion, taking screenshots every 15 s
         """
         log.info("═══ RUN SIMULATION ═══")
@@ -910,12 +951,16 @@ class CelsiusAutomation:
     async def export_results(self, output_path):
         """Export results INI from Celsius.
 
-        Steps (from v4 logs):
-        1. Click 'Export and load' tab (x=889, y sweep 28-40)
-        2. Click the Export config folder icon → Windows Save dialog
+        Steps:
+        1. Click 'Export and load' tab (x=1210, y sweep 30-44)  ← CONFIRMED
+        2. Click the 'Save results to file' folder icon at (738,301)
         3. Set the output path via Alt+N, Ctrl+V, Enter
-        4. Click the SAVE button
+        4. Click the SAVE button at (762,301)  ← CONFIRMED
         5. Verify the file was created
+
+        Note: Uses the 'Save results to file' row (Y≈301), NOT the
+        'Export config file (.ini)' row (Y≈204) — results are the
+        simulation output, not the config.
         """
         log.info(f"═══ EXPORT RESULTS → {output_path} ═══")
         bring_to_front()
@@ -928,17 +973,18 @@ class CelsiusAutomation:
             await click_tab("Export and load")
             await asyncio.sleep(1)
 
-            # Step 2: Click the folder icon for "Export config file"
-            export_folder_candidates = [
-                EXPORT_TAB_SAVE_FOLDER_ICON,        # (920, 280)
-                (920, 260), (920, 300),
-                (900, 280), (940, 280),
-                (880, 280), (960, 280),
-                (920, 240), (920, 320),
+            # Step 2: Click the folder icon for "Save results to file"
+            # CONFIRMED position: (738, 301) from screenshot.
+            results_folder_candidates = [
+                EXPORT_TAB_RESULTS_FOLDER_ICON,     # (738, 301) CONFIRMED
+                (738, 291), (738, 311),
+                (728, 301), (748, 301),
+                (718, 301), (758, 301),
+                (738, 281), (738, 321),
             ]
             dialog_opened = await self._click_candidates(
-                export_folder_candidates,
-                label="export_folder_icon",
+                results_folder_candidates,
+                label="results_folder_icon",
                 check_dialog=True,
                 dialog_timeout=2.0,
             )
@@ -949,16 +995,17 @@ class CelsiusAutomation:
             await self._browse_and_select_file(output_path)
             await asyncio.sleep(2)
 
-            # Step 4: Click the SAVE button
-            save_btn_candidates = [
-                EXPORT_TAB_SAVE_BUTTON,             # (1050, 280)
-                (1050, 260), (1050, 300),
-                (1030, 280), (1070, 280),
-                (1080, 280), (1020, 280),
-                (1050, 240), (1050, 320),
+            # Step 4: Click the SAVE button for "Save results to file"
+            # CONFIRMED position: (762, 301) from screenshot.
+            results_save_candidates = [
+                EXPORT_TAB_RESULTS_SAVE_BUTTON,     # (762, 301) CONFIRMED
+                (762, 291), (762, 311),
+                (752, 301), (772, 301),
+                (742, 301), (782, 301),
+                (762, 281), (762, 321),
             ]
             await self._click_candidates(
-                save_btn_candidates, label="save_button")
+                results_save_candidates, label="results_save_button")
             await asyncio.sleep(3)
             take_screenshot("after_export")
 
@@ -1255,7 +1302,7 @@ class KelvinAgentServer:
 
         log.info("=" * 64)
         log.info(f"  Project Kelvin Agent v{AGENT_VERSION} "
-                 f"(confirmed tab click coords)")
+                 f"(all 12 tabs confirmed, Mar 31 2026)")
         log.info(f"  Server: http://localhost:{AGENT_PORT}")
         log.info(f"  Celsius: {self.celsius.celsius_path}")
         log.info(f"  Work dir: {WORK_DIR}")
